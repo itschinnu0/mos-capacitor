@@ -1,6 +1,8 @@
 """Analytical MOS capacitor electrostatic calculations."""
 
 import math
+import numpy as np
+from dataclasses import dataclass
 
 from .constants import (
     EPSILON_OX,
@@ -10,6 +12,18 @@ from .constants import (
     silicon_intrinsic_carrier_concentration,
 )
 from .parameters import MOSParameters
+
+
+@dataclass(frozen=True)
+class Level1Point:
+    """Single operating point from the Level 1 analytical model."""
+
+    voltage: float
+    surface_potential: float
+    region: str
+    depletion_width: float
+    depletion_capacitance: float
+    capacitance: float
 
 
 class MOSCapacitor:
@@ -87,3 +101,89 @@ class MOSCapacitor:
             return math.inf
 
         return EPSILON_SI * self.parameters.area / width
+
+    def level1_surface_potential(self, voltage: float) -> float:
+        """Solve the Level 1 depletion approximation for surface potential."""
+        voltage_bias = voltage - self.V_FB
+
+        if voltage_bias < 0.0:
+            return voltage_bias
+
+        k = math.sqrt(2.0 * Q * EPSILON_SI * self.parameters.NA) / self.Cox_per_area
+
+        x = (-k + math.sqrt(k**2 + 4.0 * voltage_bias)) / 2.0
+
+        return x**2
+
+    def level1_point(self, voltage: float) -> Level1Point:
+        """Calculate one operating point using the Level 1 model."""
+        voltage_bias = voltage - self.V_FB
+
+        # Accumulation
+        if voltage_bias < 0.0:
+            return Level1Point(
+                voltage=voltage,
+                surface_potential=voltage_bias,
+                region="accumulation",
+                depletion_width=0.0,
+                depletion_capacitance=math.inf,
+                capacitance=self.Cox,
+            )
+
+        # Depletion/inversion surface potential
+        psi_s = self.level1_surface_potential(voltage)
+
+        # Strong inversion
+        if psi_s >= 2.0 * self.phi_F:
+            return Level1Point(
+                voltage=voltage,
+                surface_potential=psi_s,
+                region="inversion",
+                depletion_width=self.Wd_max,
+                depletion_capacitance=self.Cdep_min,
+                capacitance=self.Cmin,
+            )
+
+        # Depletion
+        width = self.depletion_width(psi_s)
+
+        if width == 0.0:
+            cdep = math.inf
+            capacitance = self.Cox
+        else:
+            cdep = self.depletion_capacitance(psi_s)
+            capacitance = self.Cox * cdep / (self.Cox + cdep)
+
+        return Level1Point(
+            voltage=voltage,
+            surface_potential=psi_s,
+            region="depletion",
+            depletion_width=width,
+            depletion_capacitance=cdep,
+            capacitance=capacitance,
+        )
+
+    def generate_level1_cv(
+        self,
+        voltage_min: float,
+        voltage_max: float,
+        voltage_step: float,
+    ) -> list[Level1Point]:
+        """Generate Level 1 C-V data across the requested voltage range."""
+        if voltage_max <= voltage_min:
+            raise ValueError("Voltage maximum must be greater than voltage minimum.")
+
+        if voltage_step <= 0.0:
+            raise ValueError("Voltage step must be greater than 0.")
+
+        voltages = np.arange(
+            voltage_min,
+            voltage_max + voltage_step,
+            voltage_step,
+        )
+
+        return [
+            self.level1_point(float(voltage))
+            for voltage in voltages
+            if voltage <= voltage_max
+        ]
