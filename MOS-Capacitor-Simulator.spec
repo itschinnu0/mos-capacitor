@@ -1,10 +1,20 @@
 # -*- mode: python ; coding: utf-8 -*-
+import os
+
 from PyInstaller.utils.hooks import collect_all
 from PyInstaller.utils.hooks import copy_metadata
 
-datas = [('app.py', '.')]
+project_root = os.path.abspath(SPECPATH)
+
+datas = [('app.py', '.'), (os.path.join(project_root, 'physics'), 'physics')]
 binaries = []
-hiddenimports = []
+hiddenimports = [
+    'physics',
+    'physics.constants',
+    'physics.parameters',
+    'physics.mos_capacitor',
+    'physics.solver',
+]
 datas += copy_metadata('streamlit')
 tmp_ret = collect_all('streamlit')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
@@ -12,7 +22,7 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 a = Analysis(
     ['launcher.py'],
-    pathex=[],
+    pathex=[project_root],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
