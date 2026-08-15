@@ -1,4 +1,4 @@
-# import io
+import io
 
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -15,7 +15,7 @@ st.set_page_config(
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Helper functions
 # ---------------------------------------------------------------------------
 
 
@@ -60,8 +60,69 @@ def create_parameters(
     )
 
 
+def generate_numerical_cv_data(
+    mos: MOSCapacitor,
+    voltage_min: float,
+    voltage_max: float,
+    voltage_step: float,
+    high_frequency: bool,
+) -> pd.DataFrame:
+    """Generate Level 2 numerical C-V data."""
+    level1_points = mos.generate_level1_cv(
+        voltage_min=voltage_min,
+        voltage_max=voltage_max,
+        voltage_step=voltage_step,
+    )
+
+    rows = []
+
+    for point in level1_points:
+        psi_s = mos.numerical_surface_potential(point.voltage)
+
+        capacitance = mos.numerical_capacitance(
+            point.voltage,
+            high_frequency=high_frequency,
+        )
+
+        if psi_s < 0.0:
+            region = "Accumulation"
+        elif psi_s < 2.0 * mos.phi_F:
+            region = "Depletion"
+        else:
+            region = "Inversion"
+
+        rows.append(
+            {
+                "Voltage": point.voltage,
+                "Capacitance": capacitance,
+                "Region": region,
+                "Surface Potential": psi_s,
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
+def parse_sweep_values(value_text: str) -> list[float]:
+    """Parse comma-separated positive numeric sweep values."""
+    try:
+        values = [
+            float(value.strip()) for value in value_text.split(",") if value.strip()
+        ]
+    except ValueError as exc:
+        raise ValueError("Sweep values must be comma-separated numbers.") from exc
+
+    if not values:
+        raise ValueError("At least one sweep value is required.")
+
+    if any(value <= 0.0 for value in values):
+        raise ValueError("Sweep values must be greater than zero.")
+
+    return values
+
+
 # ---------------------------------------------------------------------------
-# Title
+# Title/caption
 # ---------------------------------------------------------------------------
 
 st.title("MOS Capacitor C–V Simulator")
@@ -72,7 +133,7 @@ st.caption(
 )
 
 # ---------------------------------------------------------------------------
-# Sidebar — Device parameters
+# Sidebar controls
 # ---------------------------------------------------------------------------
 
 with st.sidebar:
@@ -160,13 +221,48 @@ with st.sidebar:
     simulate = st.button(
         "Simulate / Update",
         type="primary",
-        use_container_width=True,
+        width="stretch",
     )
 
     reset = st.button(
         "Reset to Defaults",
-        use_container_width=True,
+        width="stretch",
     )
+
+    st.divider()
+
+    st.header("Parameter Sweep")
+
+    sweep_parameter = st.selectbox(
+        "Sweep parameter",
+        options=[
+            "None",
+            "Oxide thickness",
+            "Substrate doping",
+            "Gate area",
+        ],
+    )
+
+    if sweep_parameter == "Oxide thickness":
+        sweep_values_text = st.text_input(
+            "tₒₓ values (nm)",
+            value="5, 10, 20",
+        )
+
+    elif sweep_parameter == "Substrate doping":
+        sweep_values_text = st.text_input(
+            "Nₐ values (cm⁻³)",
+            value="1e15, 1e16, 1e17",
+        )
+
+    elif sweep_parameter == "Gate area":
+        sweep_values_text = st.text_input(
+            "Area values (µm²)",
+            value="50, 100, 200",
+        )
+
+    else:
+        sweep_values_text = ""
 
 
 # ---------------------------------------------------------------------------
@@ -178,7 +274,7 @@ if reset:
 
 
 # ---------------------------------------------------------------------------
-# Validation
+# Input validation
 # ---------------------------------------------------------------------------
 
 if voltage_max <= voltage_min:
@@ -191,8 +287,10 @@ if voltage_step <= 0:
 
 
 # ---------------------------------------------------------------------------
-# Physics model
+# Main MOS model creation
 # ---------------------------------------------------------------------------
+
+high_frequency = frequency_mode == "High Frequency"
 
 try:
     parameters = create_parameters(
@@ -206,6 +304,8 @@ try:
 
     mos = MOSCapacitor(parameters)
 
+    sweep_curves: list[tuple[str, pd.DataFrame]] = []
+
 except ValueError as exc:
     st.error(f"Invalid device parameters: {exc}")
     st.stop()
@@ -213,6 +313,65 @@ except ValueError as exc:
 except Exception as exc:
     st.error(f"Unable to initialize MOS model: {exc}")
     st.stop()
+
+
+# ---------------------------------------------------------------------------
+# Parameter sweep calculation
+# ---------------------------------------------------------------------------
+
+if sweep_parameter != "None":
+    try:
+        sweep_values = parse_sweep_values(sweep_values_text)
+
+        for value in sweep_values:
+            if sweep_parameter == "Oxide thickness":
+                sweep_parameters = MOSParameters.from_gui_units(
+                    NA_cm3=na_cm3,
+                    tox_nm=value,
+                    area_um2=area_um2,
+                    temperature_K=temperature_k,
+                    phi_ms_V=phi_ms_v,
+                    q_ox_C_m2=q_ox_c_m2,
+                )
+                label = f"tₒₓ = {value:g} nm"
+
+            elif sweep_parameter == "Substrate doping":
+                sweep_parameters = MOSParameters.from_gui_units(
+                    NA_cm3=value,
+                    tox_nm=tox_nm,
+                    area_um2=area_um2,
+                    temperature_K=temperature_k,
+                    phi_ms_V=phi_ms_v,
+                    q_ox_C_m2=q_ox_c_m2,
+                )
+                label = f"Nₐ = {value:.3e} cm⁻³"
+
+            else:
+                sweep_parameters = MOSParameters.from_gui_units(
+                    NA_cm3=na_cm3,
+                    tox_nm=tox_nm,
+                    area_um2=value,
+                    temperature_K=temperature_k,
+                    phi_ms_V=phi_ms_v,
+                    q_ox_C_m2=q_ox_c_m2,
+                )
+                label = f"A = {value:g} µm²"
+
+            sweep_mos = MOSCapacitor(sweep_parameters)
+
+            sweep_data = generate_numerical_cv_data(
+                mos=sweep_mos,
+                voltage_min=voltage_min,
+                voltage_max=voltage_max,
+                voltage_step=voltage_step,
+                high_frequency=high_frequency,
+            )
+
+            sweep_curves.append((label, sweep_data))
+
+    except ValueError as exc:
+        st.error(f"Invalid sweep configuration: {exc}")
+        sweep_curves = []
 
 
 # ---------------------------------------------------------------------------
@@ -273,45 +432,17 @@ with col3:
 
 
 # ---------------------------------------------------------------------------
-# Generate C-V data
+# Main numerical C-V data generation
 # ---------------------------------------------------------------------------
 
-high_frequency = frequency_mode == "High Frequency"
-
 try:
-    voltage_points = mos.generate_level1_cv(
+    cv_data = generate_numerical_cv_data(
+        mos=mos,
         voltage_min=voltage_min,
         voltage_max=voltage_max,
         voltage_step=voltage_step,
+        high_frequency=high_frequency,
     )
-
-    numerical_rows = []
-
-    for point in voltage_points:
-        psi_s = mos.numerical_surface_potential(point.voltage)
-
-        capacitance = mos.numerical_capacitance(
-            point.voltage,
-            high_frequency=high_frequency,
-        )
-
-        if psi_s < 0.0:
-            region = "Accumulation"
-        elif psi_s < 2.0 * mos.phi_F:
-            region = "Depletion"
-        else:
-            region = "Inversion"
-
-        numerical_rows.append(
-            {
-                "Voltage": point.voltage,
-                "Capacitance": capacitance,
-                "Region": region,
-                "Surface Potential": psi_s,
-            }
-        )
-
-    cv_data = pd.DataFrame(numerical_rows)
 
 except Exception as exc:
     st.error(f"Numerical C–V calculation failed: {exc}")
@@ -400,21 +531,32 @@ with result_col3:
 
 
 # ---------------------------------------------------------------------------
-# C-V plot
+# C-V plot construction
 # ---------------------------------------------------------------------------
 
 st.header("C–V Characteristic")
 
-fig, ax = plt.subplots(figsize=(11, 5))
-
-capacitance_pf = cv_data["Capacitance"] * 1e12
+fig, ax = plt.subplots(
+    figsize=(11, 5),
+    dpi=100,
+)
 
 ax.plot(
     cv_data["Voltage"],
-    capacitance_pf,
-    linewidth=2,
-    label=frequency_mode,
+    cv_data["Capacitance"] * 1e12,
+    linewidth=2.2,
+    label="Main C-V",
 )
+
+capacitance_pf = cv_data["Capacitance"] * 1e12
+
+for label, sweep_data in sweep_curves:
+    ax.plot(
+        sweep_data["Voltage"],
+        sweep_data["Capacitance"] * 1e12,
+        linewidth=1.8,
+        label=label,
+    )
 
 # -----------------------------------------------------------------------
 # Region boundaries
@@ -514,13 +656,65 @@ ax.set_title("MOS Capacitor C–V Characteristic")
 ax.grid(True, alpha=0.25)
 ax.legend()
 
-st.pyplot(fig, use_container_width=True)
+# ---------------------------------------------------------------------------
+# Interactive plot rendering
+# ---------------------------------------------------------------------------
+
+plot_buffer = io.BytesIO()
+
+fig.savefig(
+    plot_buffer,
+    format="png",
+    dpi=100,
+)
+
+plot_buffer.seek(0)
+
+st.image(
+    plot_buffer,
+    width="stretch",
+)
+
+# ---------------------------------------------------------------------------
+# CSV/PNG exports
+# ---------------------------------------------------------------------------
+
+st.subheader("Export")
+
+png_buffer = io.BytesIO()
+
+fig.savefig(
+    png_buffer,
+    format="png",
+    dpi=150,
+    bbox_inches="tight",
+)
+
+png_buffer.seek(0)
+
+st.download_button(
+    label="Download C–V Plot (PNG)",
+    data=png_buffer,
+    file_name="mos_capacitor_cv.png",
+    mime="image/png",
+    key="download_cv_png",
+)
+
+csv_data = cv_data.to_csv(index=False).encode("utf-8")
+
+st.download_button(
+    label="Download C–V Data (CSV)",
+    data=csv_data,
+    file_name="mos_capacitor_cv.csv",
+    mime="text/csv",
+    key="download_cv_csv",
+)
 
 plt.close(fig)
 
 
 # ---------------------------------------------------------------------------
-# Model information
+# Model assumptions
 # ---------------------------------------------------------------------------
 
 with st.expander("Model assumptions"):
