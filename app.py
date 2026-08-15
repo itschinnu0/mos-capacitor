@@ -1,4 +1,4 @@
-import io
+# import io
 
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -6,7 +6,6 @@ import streamlit as st
 
 from physics.mos_capacitor import MOSCapacitor
 from physics.parameters import MOSParameters
-
 
 st.set_page_config(
     page_title="MOS Capacitor Simulator",
@@ -18,6 +17,7 @@ st.set_page_config(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def engineering_capacitance(value_f: float) -> str:
     """Format capacitance using an appropriate engineering prefix."""
@@ -319,46 +319,6 @@ except Exception as exc:
 
 
 # ---------------------------------------------------------------------------
-# C-V plot
-# ---------------------------------------------------------------------------
-
-st.header("C–V Characteristic")
-
-fig, ax = plt.subplots(figsize=(11, 5))
-
-ax.plot(
-    cv_data["Voltage"],
-    cv_data["Capacitance"] * 1e12,
-    linewidth=2,
-    label=frequency_mode,
-)
-
-ax.axvline(
-    mos.V_FB,
-    linestyle="--",
-    linewidth=1,
-    label=f"VFB = {mos.V_FB:.3f} V",
-)
-
-ax.axvline(
-    mos.V_T,
-    linestyle="--",
-    linewidth=1,
-    label=f"VT = {mos.V_T:.3f} V",
-)
-
-ax.set_xlabel("Gate Voltage, V_G (V)")
-ax.set_ylabel("Capacitance (pF)")
-ax.set_title("MOS Capacitor C–V Characteristic")
-ax.grid(True, alpha=0.25)
-ax.legend()
-
-st.pyplot(fig, use_container_width=True)
-
-plt.close(fig)
-
-
-# ---------------------------------------------------------------------------
 # Applied voltage analysis
 # ---------------------------------------------------------------------------
 
@@ -440,12 +400,131 @@ with result_col3:
 
 
 # ---------------------------------------------------------------------------
+# C-V plot
+# ---------------------------------------------------------------------------
+
+st.header("C–V Characteristic")
+
+fig, ax = plt.subplots(figsize=(11, 5))
+
+capacitance_pf = cv_data["Capacitance"] * 1e12
+
+ax.plot(
+    cv_data["Voltage"],
+    capacitance_pf,
+    linewidth=2,
+    label=frequency_mode,
+)
+
+# -----------------------------------------------------------------------
+# Region boundaries
+# -----------------------------------------------------------------------
+
+ax.axvline(
+    mos.V_FB,
+    linestyle="--",
+    linewidth=1,
+    label=f"VFB = {mos.V_FB:.3f} V",
+)
+
+ax.axvline(
+    mos.V_T,
+    linestyle="--",
+    linewidth=1,
+    label=f"VT = {mos.V_T:.3f} V",
+)
+
+# -----------------------------------------------------------------------
+# Region labels
+# -----------------------------------------------------------------------
+
+x_min = float(cv_data["Voltage"].min())
+x_max = float(cv_data["Voltage"].max())
+
+region_y = float(capacitance_pf.max()) * 0.92
+
+accumulation_x = (x_min + mos.V_FB) / 2.0
+depletion_x = (mos.V_FB + mos.V_T) / 2.0
+inversion_x = (mos.V_T + x_max) / 2.0
+
+if x_min < mos.V_FB:
+    ax.text(
+        accumulation_x,
+        region_y,
+        "ACCUMULATION",
+        ha="center",
+        va="center",
+        fontsize=10,
+        fontweight="bold",
+    )
+
+if mos.V_FB < x_max and mos.V_FB < mos.V_T:
+    ax.text(
+        depletion_x,
+        region_y,
+        "DEPLETION",
+        ha="center",
+        va="center",
+        fontsize=10,
+        fontweight="bold",
+    )
+
+if mos.V_T < x_max:
+    ax.text(
+        inversion_x,
+        region_y,
+        "INVERSION",
+        ha="center",
+        va="center",
+        fontsize=10,
+        fontweight="bold",
+    )
+
+# -----------------------------------------------------------------------
+# Selected operating point
+# -----------------------------------------------------------------------
+
+selected_point = mos.numerical_capacitance(
+    applied_voltage,
+    high_frequency=high_frequency,
+)
+
+ax.scatter(
+    [applied_voltage],
+    [selected_point * 1e12],
+    s=70,
+    zorder=5,
+    label=f"Selected V = {applied_voltage:.3f} V",
+)
+
+ax.axvline(
+    applied_voltage,
+    linestyle=":",
+    linewidth=1,
+    alpha=0.7,
+)
+
+# -----------------------------------------------------------------------
+# Plot formatting
+# -----------------------------------------------------------------------
+
+ax.set_xlabel("Gate Voltage, V_G (V)")
+ax.set_ylabel("Capacitance (pF)")
+ax.set_title("MOS Capacitor C–V Characteristic")
+ax.grid(True, alpha=0.25)
+ax.legend()
+
+st.pyplot(fig, use_container_width=True)
+
+plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
 # Model information
 # ---------------------------------------------------------------------------
 
 with st.expander("Model assumptions"):
-    st.markdown(
-        """
+    st.markdown("""
         **Device**
         - p-type silicon substrate
         - Uniform substrate doping
@@ -466,5 +545,4 @@ with st.expander("Model assumptions"):
 
         **Internal units**
         - All physics calculations use SI units.
-        """
-    )
+        """)
