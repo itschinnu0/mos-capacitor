@@ -110,13 +110,13 @@ def parse_sweep_values(value_text: str) -> list[float]:
             float(value.strip()) for value in value_text.split(",") if value.strip()
         ]
     except ValueError as exc:
-        raise ValueError("Sweep values must be comma-separated numbers.") from exc
+        raise ValueError("Sweep values must be comma-separated positive numbers.") from exc
 
     if not values:
-        raise ValueError("At least one sweep value is required.")
+        raise ValueError("Sweep values must be comma-separated positive numbers.")
 
     if any(value <= 0.0 for value in values):
-        raise ValueError("Sweep values must be greater than zero.")
+        raise ValueError("Sweep values must be comma-separated positive numbers.")
 
     return values
 
@@ -128,8 +128,22 @@ def parse_sweep_values(value_text: str) -> list[float]:
 st.title("MOS Capacitor C–V Simulator")
 
 st.caption(
-    "Ideal p-type silicon MOS capacitor — analytical and numerical "
-    "surface-potential models"
+    "p-type silicon MOS capacitor simulator using an analytical Level 1 "
+    "depletion approximation and a numerical Level 2 surface-potential model, "
+    "with High Frequency and Low Frequency / Quasi-static operating modes."
+)
+
+st.subheader("Header")
+st.caption(
+    "Use the sidebar to configure device parameters and simulation controls. "
+    "The displayed C-V curve is the Level 2 numerical model."
+)
+st.divider()
+
+st.subheader("Device Parameters / Simulation Controls")
+st.caption(
+    "All parameter inputs are in the sidebar. Reference defaults are preloaded "
+    "for reproducible comparisons."
 )
 
 # ---------------------------------------------------------------------------
@@ -145,6 +159,7 @@ with st.sidebar:
         max_value=1e20,
         value=1e16,
         format="%.3e",
+        help="Accepts positive substrate doping concentration in cm⁻³.",
     )
 
     tox_nm = st.number_input(
@@ -153,6 +168,7 @@ with st.sidebar:
         max_value=1000.0,
         value=10.0,
         step=0.5,
+        help="Gate-oxide physical thickness in nanometers.",
     )
 
     area_um2 = st.number_input(
@@ -161,6 +177,7 @@ with st.sidebar:
         max_value=1e12,
         value=100.0,
         step=10.0,
+        help="MOS capacitor gate area in square micrometers.",
     )
 
     temperature_k = st.number_input(
@@ -169,12 +186,14 @@ with st.sidebar:
         max_value=1000.0,
         value=300.0,
         step=1.0,
+        help="Absolute temperature in kelvin.",
     )
 
     phi_ms_v = st.number_input(
         "Metal-semiconductor work-function difference ΦMS (V)",
         value=0.0,
         step=0.01,
+        help="Metal-semiconductor work-function offset.",
     )
 
     q_ox_c_m2 = st.number_input(
@@ -182,6 +201,7 @@ with st.sidebar:
         value=0.0,
         step=1e-6,
         format="%.3e",
+        help="Fixed oxide charge density in C/m².",
     )
 
     st.divider()
@@ -194,18 +214,21 @@ with st.sidebar:
             "High Frequency",
             "Low Frequency / Quasi-static",
         ],
+        help="High Frequency freezes minority-carrier response in inversion.",
     )
 
     voltage_min = st.number_input(
         "Voltage minimum (V)",
         value=-5.0,
         step=0.5,
+        help="Start of gate-voltage sweep.",
     )
 
     voltage_max = st.number_input(
         "Voltage maximum (V)",
         value=5.0,
         step=0.5,
+        help="End of gate-voltage sweep.",
     )
 
     voltage_step = st.number_input(
@@ -214,11 +237,12 @@ with st.sidebar:
         value=0.01,
         step=0.01,
         format="%.4f",
+        help="Gate-voltage increment for C-V sampling.",
     )
 
     st.divider()
 
-    simulate = st.button(
+    _simulate = st.button(
         "Simulate / Update",
         type="primary",
         width="stretch",
@@ -305,6 +329,7 @@ try:
     mos = MOSCapacitor(parameters)
 
     sweep_curves: list[tuple[str, pd.DataFrame]] = []
+    sweep_values: list[float] = []
 
 except ValueError as exc:
     st.error(f"Invalid device parameters: {exc}")
@@ -370,8 +395,9 @@ if sweep_parameter != "None":
             sweep_curves.append((label, sweep_data))
 
     except ValueError as exc:
-        st.error(f"Invalid sweep configuration: {exc}")
+        st.error(str(exc))
         sweep_curves = []
+        sweep_values = []
 
 
 # ---------------------------------------------------------------------------
@@ -450,17 +476,23 @@ except Exception as exc:
 
 
 # ---------------------------------------------------------------------------
-# Applied voltage analysis
+# C-V plot construction
 # ---------------------------------------------------------------------------
 
-st.header("Applied Voltage Analysis")
+st.subheader("C–V Characteristic")
 
 applied_voltage = st.number_input(
-    "Applied gate voltage V_G (V)",
+    "Selected gate voltage V_G (V)",
     min_value=float(voltage_min),
     max_value=float(voltage_max),
     value=float(min(max(1.5, voltage_min), voltage_max)),
     step=float(voltage_step),
+    help="Selected operating point shown on the C-V plot and in the analysis panel.",
+)
+
+st.caption(
+    "Displayed curve: Level 2 numerical surface-potential model. "
+    "Markers indicate VFB, VT, and the selected operating voltage."
 )
 
 try:
@@ -487,54 +519,6 @@ try:
 except Exception as exc:
     st.error(f"Unable to analyze applied voltage: {exc}")
     st.stop()
-
-result_col1, result_col2, result_col3 = st.columns(3)
-
-with result_col1:
-    st.metric(
-        "Operating region",
-        region,
-    )
-
-    st.metric(
-        "Surface potential",
-        f"{psi_s:.6f} V",
-    )
-
-with result_col2:
-    st.metric(
-        "Depletion width",
-        engineering_length(depletion_width),
-    )
-
-    if c_dep is None:
-        st.metric(
-            "Depletion capacitance",
-            "Not applicable",
-        )
-    else:
-        st.metric(
-            "Depletion capacitance",
-            engineering_capacitance(c_dep),
-        )
-
-with result_col3:
-    st.metric(
-        "Oxide capacitance",
-        engineering_capacitance(mos.Cox),
-    )
-
-    st.metric(
-        "Total MOS capacitance",
-        engineering_capacitance(total_capacitance),
-    )
-
-
-# ---------------------------------------------------------------------------
-# C-V plot construction
-# ---------------------------------------------------------------------------
-
-st.header("C–V Characteristic")
 
 fig, ax = plt.subplots(
     figsize=(11, 5),
@@ -654,7 +638,7 @@ ax.set_xlabel("Gate Voltage, V_G (V)")
 ax.set_ylabel("Capacitance (pF)")
 ax.set_title("MOS Capacitor C–V Characteristic")
 ax.grid(True, alpha=0.25)
-ax.legend()
+ax.legend(fontsize=9)
 
 # ---------------------------------------------------------------------------
 # Interactive plot rendering
@@ -674,6 +658,74 @@ st.image(
     plot_buffer,
     width="stretch",
 )
+
+st.divider()
+
+# ---------------------------------------------------------------------------
+# Applied voltage analysis
+# ---------------------------------------------------------------------------
+
+st.subheader("Applied Voltage Analysis")
+
+result_col1, result_col2, result_col3 = st.columns(3)
+
+with result_col1:
+    st.metric(
+        "Operating region",
+        region,
+    )
+
+    st.metric(
+        "Surface potential ψs",
+        f"{psi_s:.6f} V",
+    )
+
+with result_col2:
+    st.metric(
+        "Depletion width Wd",
+        engineering_length(depletion_width),
+    )
+
+    if c_dep is None:
+        st.metric(
+            "Depletion capacitance Cdep",
+            "Not applicable",
+        )
+    else:
+        st.metric(
+            "Depletion capacitance Cdep",
+            engineering_capacitance(c_dep),
+        )
+
+with result_col3:
+    st.metric(
+        "Oxide capacitance Cox",
+        engineering_capacitance(mos.Cox),
+    )
+
+    st.metric(
+        "Total MOS capacitance",
+        engineering_capacitance(total_capacitance),
+    )
+
+st.divider()
+
+# ---------------------------------------------------------------------------
+# Parameter Sweep / Analysis
+# ---------------------------------------------------------------------------
+
+st.subheader("Parameter Sweep / Analysis")
+
+if sweep_parameter == "None":
+    st.caption("Sweep mode is disabled. Showing the single reference C-V curve.")
+else:
+    st.caption(
+        f"Active sweep: {sweep_parameter} | Values: "
+        f"{', '.join(f'{value:g}' for value in sweep_values)}"
+    )
+    st.caption(f"Rendered sweep curves: {len(sweep_curves)}")
+
+st.divider()
 
 # ---------------------------------------------------------------------------
 # CSV/PNG exports
@@ -712,10 +764,78 @@ st.download_button(
 
 plt.close(fig)
 
+st.divider()
+
+# ---------------------------------------------------------------------------
+# Theory / Model
+# ---------------------------------------------------------------------------
+
+st.subheader("Theory / Model")
+
+with st.expander("Model Status"):
+    st.markdown(
+        """
+        - **Level 1:** Analytical/depletion approximation
+        - **Level 2:** Numerical Boltzmann surface-potential model
+        - **Displayed C–V:** Level 2 numerical model
+        """
+    )
+
+with st.expander("Theory and Equations"):
+    st.markdown(
+        r"""
+        The simulator uses a p-type silicon MOS capacitor formulation with SI-unit
+        internal calculations.
+
+        **Oxide capacitance**
+
+        $$C'_{ox} = \frac{\varepsilon_{ox}}{t_{ox}}$$
+        $$C_{ox} = C'_{ox} A$$
+
+        **Flat-band voltage**
+
+        $$V_{FB} = \Phi_{MS} - \frac{Q_{ox}}{C'_{ox}}$$
+
+        **Fermi potential**
+
+        $$\phi_F = \frac{kT}{q}\ln\!\left(\frac{N_A}{n_i}\right)$$
+
+        **Threshold voltage**
+
+        $$V_T = V_{FB} + 2\phi_F + \frac{|Q_{d,max}|}{C'_{ox}}$$
+
+        **Maximum depletion width**
+
+        $$W_{d,max} = \sqrt{\frac{4\varepsilon_{si}\phi_F}{qN_A}}$$
+
+        **Minimum capacitance**
+
+        $$C_{min} = \frac{C_{ox}C_{dep,min}}{C_{ox} + C_{dep,min}}$$
+
+        **Operating regions**
+
+        - **Accumulation:** negative surface potential for the p-type substrate.
+        - **Depletion:** positive surface potential below strong inversion.
+        - **Inversion:** surface potential at or above approximately $2\phi_F$.
+
+        **Frequency modes**
+
+        - **High Frequency:** minority-carrier response is frozen in strong inversion.
+        - **Low Frequency / Quasi-static:** equilibrium minority-carrier response is included.
+
+        **Level 2 numerical solver**
+
+        Surface potential is solved numerically with a bounded root-finding method,
+        then charge/capacitance are computed from that solution.
+        """
+    )
+
 
 # ---------------------------------------------------------------------------
 # Model assumptions
 # ---------------------------------------------------------------------------
+
+st.subheader("Model Assumptions")
 
 with st.expander("Model assumptions"):
     st.markdown("""
