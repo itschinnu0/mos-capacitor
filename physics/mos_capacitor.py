@@ -12,6 +12,7 @@ from .constants import (
     silicon_intrinsic_carrier_concentration,
 )
 from .parameters import MOSParameters
+from .solver import SurfacePotentialSolver
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,11 @@ class MOSCapacitor:
         self.parameters = parameters
 
         self.ni = silicon_intrinsic_carrier_concentration(parameters.temperature)
+
+        self.solver = SurfacePotentialSolver(
+            parameters,
+            self.ni,
+        )
 
     @property
     def Cox_per_area(self) -> float:
@@ -187,3 +193,44 @@ class MOSCapacitor:
             for voltage in voltages
             if voltage <= voltage_max
         ]
+
+    def numerical_surface_potential(
+        self,
+        voltage: float,
+    ) -> float:
+        """Solve Level 2 surface potential for a gate voltage."""
+        result = self.solver.solve(
+            voltage=voltage,
+            v_fb=self.V_FB,
+            c_ox_per_area=self.Cox_per_area,
+        )
+
+        return result.surface_potential
+
+    def numerical_semiconductor_capacitance_per_area(
+        self,
+        psi_s: float,
+        high_frequency: bool = True,
+    ) -> float:
+        """Return Level 2 semiconductor capacitance per unit area."""
+        if high_frequency and psi_s >= 2.0 * self.phi_F:
+            return EPSILON_SI / self.Wd_max
+
+        return self.solver.semiconductor_capacitance_per_area(psi_s)
+
+    def numerical_capacitance(
+        self,
+        voltage: float,
+        high_frequency: bool = True,
+    ) -> float:
+        """Return total Level 2 MOS capacitance."""
+        psi_s = self.numerical_surface_potential(voltage)
+
+        c_s = self.numerical_semiconductor_capacitance_per_area(
+            psi_s,
+            high_frequency=high_frequency,
+        )
+
+        return self.parameters.area * (
+            self.Cox_per_area * c_s / (self.Cox_per_area + c_s)
+        )
